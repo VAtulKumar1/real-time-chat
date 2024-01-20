@@ -1,7 +1,18 @@
 {"use strict"}
 
-import {server as WebSocketServer} from "websocket"
+import {server as WebSocketServer, connection} from "websocket"
 import http from 'http'
+import { IncommingMessage, SupportedMessage } from "./messages/incommingMessage";
+import { UserManager  } from "./UserManager";
+import { InMemoryStore } from "./store/InMemoryStore";
+import { OutgoingMessage, outgoingMessageType } from "./messages/outgoingMessage";
+
+
+
+
+const userManager = new UserManager()
+const store = new InMemoryStore()
+
 
 
 var server = http.createServer(function(request: any, response:any) {
@@ -40,15 +51,86 @@ wsServer.on('request', function(request) {
     console.log((new Date()) + ' Connection accepted.');
     connection.on('message', function(message) {
         if (message.type === 'utf8') {
-            console.log('Received Message: ' + message.utf8Data);
-            connection.sendUTF(message.utf8Data);
+
+            try{
+                messageHandler(JSON.parse(message.utf8Data),connection)
+            }catch(e){
+
+            }
+
+            // console.log('Received Message: ' + message.utf8Data);
+            // connection.sendUTF(message.utf8Data);
         }
-        else if (message.type === 'binary') {
-            console.log('Received Binary Message of ' + message.binaryData.length + ' bytes');
-            connection.sendBytes(message.binaryData);
-        }
+        
     });
     connection.on('close', function(reasonCode, description) {
         console.log((new Date()) + ' Peer ' + connection.remoteAddress + ' disconnected.');
     });
 });
+
+
+function messageHandler(message: IncommingMessage,ws:connection){
+    if(message.type===SupportedMessage.JoinRoom){
+        const payload=message.payload;
+        userManager.addUser(payload.roomId,payload.userId,payload.userName,ws)
+    }
+    
+    if(message.type===SupportedMessage.SendMessage){
+        const payload=message.payload;
+        const user = userManager.getUser(payload.roomId,payload.userId)
+        if(!user){
+            console.log("User not found");
+            return
+        }
+
+        const chat=store.addChats(payload.roomId,
+            payload.userId,
+            user.name,
+            payload.message)
+
+        if(!chat){
+            return
+        }
+
+        const outgoingPayload:outgoingMessageType= {
+          
+            type:OutgoingMessage.addChat,
+            payload:{
+                roomId:payload.roomId,
+                userId:payload.userId,
+                name:user.name,
+                upvotes:0,
+                chatId:chat.id
+            }
+            
+
+        }
+
+        userManager.brodcast(payload.roomId,payload.userId,outgoingPayload)
+       
+    }
+
+    if(message.type===SupportedMessage.UpvoteMessage){
+        const payload=message.payload
+        const chat =store.upvote(payload.userId,payload.roomId,payload.chatId)
+        if(!chat){
+            return
+        }
+
+
+        const outgoingPayload:outgoingMessageType= {
+          
+            type:OutgoingMessage.updateChat,
+            payload:{
+                roomId:payload.roomId,
+                userId:payload.userId,
+                upvotes:0
+            }
+            
+
+        }
+
+        userManager.brodcast(payload.roomId,payload.userId,outgoingPayload)
+       
+    }
+}
